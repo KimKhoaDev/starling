@@ -39,8 +39,10 @@ use std::sync::{
 };
 
 const WORDS: u64 = 5 * 4;
-/// Phase 1's sections are each tested every `RETEST` frames.
-const RETEST: u32 = 8;
+/// Phase 1's sections are each tested every `RETEST` frames when the camera
+/// is still; less often when it moves, more often when it is far away.
+const RETEST_BASE: u32 = 8;
+const RETEST_MAX: u32 = 32;
 /// Culling runs while the last result read back hid at least this share of
 /// the frame's solid indices: below it the test and the second pass cost
 /// more than they save. Else one frame in `PROBE` tests every section.
@@ -145,6 +147,13 @@ pub struct Cull {
     /// Per resident slot: whether the last result read back saw it.
     seen: Vec<bool>,
     stamp: u32,
+    /// The camera position at the last test frame, to detect movement.
+    prev_camera: Option<glam::DVec3>,
+    /// The detail distance at the last test frame, to detect zoom.
+    prev_distance: f64,
+    /// How often, in frames, phase 1 retests a section: smaller when the
+    /// camera moves or the render distance is large.
+    retest: u32,
     /// Of the boxes the last test read back drew, how many it did not see
     /// and how many it drew, and the share of solid indices hidden.
     pub hidden: ([usize; 2], f32),
@@ -354,12 +363,23 @@ impl Cull {
             hidden: ([0; 2], 1.0),
             always: false,
             min_sections: 0,
+            prev_camera: None,
+            prev_distance: 0.0,
+            retest: RETEST_BASE,
         }
     }
 
     /// Start a frame: take in the results that came back, and tell whether
-    /// the frame culls.
-    pub fn begin(&mut self, device: &wgpu::Device) -> bool {
+    /// the frame culls. `camera` and `detail_distance` tune how often a
+    /// section is retested: a moving camera or a large render distance means
+    /// sections enter and leave view more often, so they are tested more
+    /// often.
+    pub fn begin(
+        &mut self,
+        device: &wgpu::Device,
+        camera: glam::DVec3,
+        detail_distance: f64,
+    ) -> bool {
         let _ = device.poll(wgpu::PollType::Poll);
         for i in 0..READBACKS {
             let r = &mut self.readbacks[(self.next + i) % READBACKS];
@@ -368,8 +388,6 @@ impl Cull {
             }
             let mapped = r.buffer.slice(..r.slots.len() as u64 * 4);
             if let Ok(data) = mapped.get_mapped_range() {
-                // The mapping isn't guaranteed to be 4-byte aligned (a Vega 11
-                // on Windows panicked in cast_slice), so decode without casting.
                 let results = readback_words(&data);
                 let (mut hidden, mut indices) = (0, 0u64);
                 for (result, &n) in results.clone().zip(&r.indices) {
@@ -397,6 +415,23 @@ impl Cull {
         self.test_indices.clear();
         self.total = 0;
         self.probe = !self.always && self.hidden.1 < MIN_SHARE;
+        // Adaptive RETEST: a camera that moves, or a large render distance,
+        // means sections enter and leave view more often, so test them more
+        // often. A still camera close to the ground changes little, so test
+        // less often to save the GPU passes the test adds.
+        let moved = self
+            .prev_camera
+            .map_or(true, |prev| camera.distance_squared(prev) > 16.0 * 16.0);
+        let far = detail_distance > 128.0;
+        self.retest = if moved || far {
+            RETEST_BASE
+        } else if detail_distance > 48.0 {
+            RETEST_BASE * 2
+        } else {
+            RETEST_MAX
+        };
+        self.prev_camera = Some(camera);
+        self.prev_distance = detail_distance;
         !self.probe || self.stamp.is_multiple_of(PROBE)
     }
 
@@ -409,7 +444,7 @@ impl Cull {
     /// solid indices: tested in turn.
     pub fn drawn(&mut self, index: usize, slot: u32, indices: u32) {
         self.total += u64::from(indices);
-        if indices > 0 && (self.probe || slot.wrapping_add(self.stamp).is_multiple_of(RETEST)) {
+        if indices > 0 && (self.probe || slot.wrapping_add(self.stamp).is_multiple_of(self.retest)) {
             self.push([index as u32, 0, 0, 0], slot, indices);
         }
     }

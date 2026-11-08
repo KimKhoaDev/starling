@@ -28,6 +28,7 @@ mod language_page;
 mod launch_page;
 mod line_edit;
 mod markdown;
+mod m3_theme;
 mod mcp;
 mod microsoft;
 mod modpacks_page;

@@ -6565,7 +6565,7 @@ impl Renderer {
                     && mirror.is_none()
                     && visible.len() >= c.min_sections
             })
-            .and_then(|cull| cull.begin(&self.device).then_some(cull));
+            .and_then(|cull| cull.begin(&self.device, camera, frame.detail_distance as f64).then_some(cull));
         self.phase2_draws.clear();
         self.phase2_pages.clear();
         self.solid_runs.clear();
