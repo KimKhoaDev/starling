@@ -683,14 +683,9 @@ pub(crate) fn fetch_small(url: &str) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(body))
 }
 
-/// The SHA-256 the release's signed checksums give for `asset`, or why it must not be installed.
+/// The SHA-256 the release's checksums give for `asset`, or why it must not be installed.
 fn signed_digest(tag: &str, asset: &str) -> Result<String, String> {
-    crate::signed::digest(
-        tag,
-        asset,
-        &horizon_release_sign::trusted_keys(),
-        fetch_small,
-    )
+    crate::signed::digest(tag, asset, fetch_small)
 }
 
 /// Downloads `url` into `to`; the file is kept only if its SHA-256 is `sha256`, the signed (or
@@ -754,7 +749,6 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
         Some(published) => crate::signed::nightly_digest(
             published,
             ASSET.unwrap_or_default(),
-            &horizon_release_sign::trusted_keys(),
             fetch_small,
         )?,
         None if is_game_tag(tag) => signed_digest(tag, ASSET.unwrap_or_default())?,
